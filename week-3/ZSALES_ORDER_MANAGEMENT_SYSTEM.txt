@@ -1,0 +1,190 @@
+*&---------------------------------------------------------------------*
+*& Report ZSALES_ORDER_MANAGEMENT_SYSTEM
+*&---------------------------------------------------------------------*
+REPORT zsales_order_management_system.
+
+*---------------------------------------------------------------------*
+* Database Table Declarations
+*----------------------------------------------------------------------*
+
+TABLES: vbak,
+        vbap,
+        kna1,
+        makt.
+
+*---------------------------------------------------------------------*
+* Structure Declaration for ALV Output
+*---------------------------------------------------------------------*
+
+TYPES: BEGIN OF lty_data,
+         vbeln  TYPE vbak-vbeln,
+         erdat  TYPE vbak-erdat,
+         auart  TYPE vbak-auart,
+         kunnr  TYPE vbak-kunnr,
+         vkorg  TYPE vbak-vkorg,
+         posnr  TYPE vbap-posnr,
+         matnr  TYPE vbap-matnr,
+         maktx  TYPE makt-maktx,
+         kwmeng TYPE vbap-kwmeng,
+         netwr  TYPE vbap-netwr,
+         name1  TYPE kna1-name1,
+       END OF lty_data.
+*---------------------------------------------------------------------*
+* Internal Table, Work Area and Variables
+*---------------------------------------------------------------------*
+DATA: lt_data  TYPE TABLE OF lty_data,
+      wa_data  TYPE lty_data,
+      lv_total TYPE vbap-netwr.
+*---------------------------------------------------------------------*
+* SALV ALV Object Declarations
+*---------------------------------------------------------------------*
+DATA: gr_alv TYPE REF TO cl_salv_table.
+DATA: lo_columns TYPE REF TO cl_salv_columns_table,
+      lo_column  TYPE REF TO cl_salv_column.
+
+*---------------------------------------------------------------------*
+* Selection Screen
+*---------------------------------------------------------------------*
+
+PARAMETERS: p_vbeln TYPE vbak-vbeln.
+
+SELECT-OPTIONS:
+  s_erdat FOR vbak-erdat,
+  s_vkorg FOR vbak-vkorg,
+  s_kunnr FOR vbak-kunnr.
+
+*---------------------------------------------------------------------*
+* Selection Screen Validation
+*---------------------------------------------------------------------*
+AT SELECTION-SCREEN.
+
+  IF p_vbeln IS INITIAL.
+    MESSAGE 'Please enter a Sales Order Number.' TYPE 'E'.
+  ENDIF.
+
+*---------------------------------------------------------------------*
+* Start of Program Execution
+*---------------------------------------------------------------------*
+
+START-OF-SELECTION.
+
+  PERFORM get_data.
+  PERFORM calculate_total.
+  PERFORM display_alv.
+
+*---------------------------------------------------------------------*
+* Fetch Sales Order Data from SAP Standard Tables
+*---------------------------------------------------------------------*
+FORM get_data.
+* Read data from VBAK, VBAP, KNA1 and MAKT tables
+  SELECT
+         a~vbeln,
+         a~erdat,
+         a~auart,
+         a~kunnr,
+         a~vkorg,
+         c~name1,
+         d~maktx,
+         b~posnr,
+         b~matnr,
+         b~kwmeng,
+         b~netwr
+    FROM vbak AS a
+    INNER JOIN vbap AS b
+      ON a~vbeln = b~vbeln
+    LEFT OUTER JOIN kna1 AS c
+      ON a~kunnr = c~kunnr
+    LEFT OUTER JOIN makt AS d
+      ON b~matnr = d~matnr
+     AND d~spras = @sy-langu
+    WHERE a~vbeln = @p_vbeln
+      AND a~erdat IN @s_erdat
+      AND a~vkorg IN @s_vkorg
+      AND a~kunnr IN @s_kunnr
+    INTO CORRESPONDING FIELDS OF TABLE @lt_data.
+
+ENDFORM.
+*---------------------------------------------------------------------*
+* Calculate Total Net Value of Sales Orders
+*---------------------------------------------------------------------*
+
+FORM calculate_total.
+
+  CLEAR lv_total.
+* Calculate total net value of all retrieved sales orders
+  LOOP AT lt_data INTO wa_data.
+    lv_total = lv_total + wa_data-netwr.
+  ENDLOOP.
+
+ENDFORM.
+
+*---------------------------------------------------------------------*
+* Display Data using SALV ALV Grid
+*---------------------------------------------------------------------*
+
+  FORM display_alv.
+
+  DATA: lo_aggregations TYPE REF TO cl_salv_aggregations.
+
+  TRY.
+
+      "Create ALV
+      cl_salv_table=>factory(
+        IMPORTING
+          r_salv_table = gr_alv
+        CHANGING
+          t_table      = lt_data ).
+
+      "Get Columns
+      lo_columns = gr_alv->get_columns( ).
+
+      "Optimize Column Width
+      lo_columns->set_optimize( abap_true ).
+
+      "Change Column Headings
+      TRY.
+          lo_column ?= lo_columns->get_column( 'VBELN' ).
+          lo_column->set_long_text( 'Sales Order Number' ).
+
+          lo_column ?= lo_columns->get_column( 'NETWR' ).
+          lo_column->set_long_text( 'Net Value (INR)' ).
+
+          lo_column ?= lo_columns->get_column( 'NAME1' ).
+          lo_column->set_long_text( 'Customer Name' ).
+
+        CATCH cx_salv_not_found.
+      ENDTRY.
+
+      "Enable ALV Toolbar
+      gr_alv->get_functions( )->set_all( abap_true ).
+
+      "Enable Zebra Pattern
+      gr_alv->get_display_settings( )->set_striped_pattern( abap_true ).
+
+      "Set Report Title
+      gr_alv->get_display_settings( )->set_list_header(
+      'Sales Order Management and Analytics System' ).
+
+      "Display Total for Net Value
+      lo_aggregations = gr_alv->get_aggregations( ).
+
+      TRY.
+          lo_aggregations->add_aggregation(
+            columnname = 'NETWR' ).
+
+        CATCH cx_salv_data_error.
+        CATCH cx_salv_existing.
+        CATCH cx_salv_not_found.
+
+      ENDTRY.
+
+      "Display ALV
+      gr_alv->display( ).
+
+    CATCH cx_salv_msg INTO DATA(lx_msg).
+
+      MESSAGE lx_msg->get_text( ) TYPE 'E'.
+
+  ENDTRY.
+
+ENDFORM.
